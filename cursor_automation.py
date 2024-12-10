@@ -20,6 +20,9 @@ class CursorAutomation:
         self.running = True
         self.is_paused = False
         self.selection_timeout = 30  # 30 seconds timeout for selection
+        self.waiting_for_completion = False
+        self.messages_sent = 0
+        self.commands_executed = 0
         self.check_dependencies()
         self.setup_logging()
         self.setup_gui()
@@ -55,7 +58,7 @@ class CursorAutomation:
         """Setup the GUI window"""
         self.root = tk.Tk()
         self.root.title("Cursor Automation")
-        self.root.geometry("400x350")
+        self.root.geometry("400x400")  # Made taller for new elements
         
         # Make window appear on top
         self.root.lift()
@@ -93,9 +96,37 @@ class CursorAutomation:
         )
         region_label.grid(row=1, column=0, columnspan=2, pady=5, sticky='ew')
         
+        # Stats frame
+        stats_frame = ttk.Frame(main_frame)
+        stats_frame.grid(row=2, column=0, columnspan=2, pady=5, sticky='ew')
+        
+        # Messages count
+        self.messages_var = tk.StringVar(value="Messages: 0")
+        messages_label = ttk.Label(
+            stats_frame,
+            textvariable=self.messages_var,
+            background='white',
+            relief='solid',
+            padding=5,
+            width=20
+        )
+        messages_label.grid(row=0, column=0, padx=2)
+        
+        # Commands count
+        self.commands_var = tk.StringVar(value="Commands: 0")
+        commands_label = ttk.Label(
+            stats_frame,
+            textvariable=self.commands_var,
+            background='white',
+            relief='solid',
+            padding=5,
+            width=20
+        )
+        commands_label.grid(row=0, column=1, padx=2)
+        
         # Buttons frame
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=10)
         
         select_btn = ttk.Button(
             btn_frame,
@@ -120,7 +151,7 @@ class CursorAutomation:
             command=self.cancel_selection,
             state='disabled'
         )
-        self.cancel_btn.grid(row=3, column=0, columnspan=2, pady=5)
+        self.cancel_btn.grid(row=4, column=0, columnspan=2, pady=5)
         
         # Instructions with better formatting
         instructions = """
@@ -139,7 +170,7 @@ Instructions:
             relief='solid',
             padding=10
         )
-        instr_label.grid(row=4, column=0, columnspan=2, pady=10, sticky='ew')
+        instr_label.grid(row=5, column=0, columnspan=2, pady=10, sticky='ew')
         
         # Error display
         self.error_var = tk.StringVar()
@@ -149,7 +180,7 @@ Instructions:
             foreground='red',
             wraplength=380
         )
-        self.error_label.grid(row=5, column=0, columnspan=2, pady=5)
+        self.error_label.grid(row=6, column=0, columnspan=2, pady=5)
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.after(100, self.update_gui)
@@ -165,6 +196,11 @@ Instructions:
                 if text:
                     self.handle_button(text)
                 self.error_var.set("")  # Clear any error message
+                
+                # Update stats
+                self.messages_var.set(f"Messages: {self.messages_sent}")
+                self.commands_var.set(f"Commands: {self.commands_executed}")
+                
             except Exception as e:
                 self.error_var.set(f"Error: {str(e)}")
                 self.logger.error(f"Error in update_gui: {e}")
@@ -278,6 +314,14 @@ Instructions:
             'command ⌘'
         ]
         
+        completed_phrases = [
+            'completed',
+            'done',
+            'success',
+            'finished'
+        ]
+        
+        # Check for run command button regardless of other text
         if any(phrase in text.lower() for phrase in accept_phrases):
             self.logger.info(f"Found button: '{text}'")
             self.status_var.set(f"Found button: '{text}'")
@@ -296,14 +340,59 @@ Instructions:
                 # Method 2: PyAutoGUI backup
                 pyautogui.hotkey('ctrl', 'enter')
                 
+                self.commands_executed += 1
                 self.logger.info("Pressed Ctrl+Enter")
                 self.status_var.set("Pressed Ctrl+Enter")
+                self.waiting_for_completion = True
                 
             except Exception as e:
                 self.logger.error(f"Error pressing Ctrl+Enter: {e}")
                 self.status_var.set(f"Error: {str(e)}")
                 
+        # Only check for completion if we're waiting for it
+        elif any(phrase in text.lower() for phrase in completed_phrases) and self.waiting_for_completion:
+            self.logger.info("Task completed, sending super prompt")
+            self.status_var.set("Task completed, sending super prompt")
+            time.sleep(0.5)
+            self.send_super_prompt()
+            self.waiting_for_completion = False
+            
+        # Handle cancel button - use Ctrl+Enter
+        elif 'cancel' in text.lower():
+            if text != self.last_text:
+                self.logger.info("Cancel button detected, sending Ctrl+Enter")
+                self.status_var.set("Cancel button detected, sending Ctrl+Enter")
+                try:
+                    keyboard.press('ctrl')
+                    time.sleep(0.15)
+                    keyboard.press('enter')
+                    time.sleep(0.15)
+                    keyboard.release('enter')
+                    keyboard.release('ctrl')
+                    time.sleep(0.15)
+                    pyautogui.hotkey('ctrl', 'enter')
+                except Exception as e:
+                    self.logger.error(f"Error pressing Ctrl+Enter for cancel: {e}")
+                    
+        # Handle skip button - just log it
+        elif 'skip' in text.lower():
+            if text != self.last_text:
+                self.logger.info("Skip button detected")
+                self.status_var.set("Skip button detected")
+                
         self.last_text = text
+
+    def send_super_prompt(self):
+        """Send the super prompt message"""
+        keyboard.press_and_release('ctrl+/')
+        time.sleep(0.5)
+        message = "look over the docs folder, reading each file again to make sure you have context of the project andcontinue with the steps and update the project steps with what we have completed and whats in progress and the implementation unless there is something critical you need to add or unless the test scripts dont show 100% functionality.You are sometimes forgetting that you are doing things that require user input try to automate all the user input yourself"
+        pyautogui.write(message)
+        time.sleep(0.5)
+        pyautogui.press('enter')
+        self.messages_sent += 1
+        self.logger.info("Sent super prompt")
+        self.status_var.set("Sent super prompt")
 
     def get_button_text(self):
         """Get text from the button area"""
